@@ -13,14 +13,8 @@ export const ClaimTab = ({
   forceReload 
 }) => {
   const [claims, setClaims] = useState([]);
-  const [stats, setStats] = useState({
-    totalBets: 0,
-    wonBets: 0,
-    lostBets: 0,
-    claimableCount: 0,
-    totalWinnings: 0,
-    totalClaimed: 0
-  });
+  const [lastClaim, setLastClaim] = useState(null);
+  const [showHistory, setShowHistory] = useState(false);
   const [loading, setLoading] = useState(true);
   const isLoadingRef = useRef(false);
   const lastLoadTime = useRef(0);
@@ -28,14 +22,7 @@ export const ClaimTab = ({
   const loadClaims = useCallback(async (force = false) => {
     if (!config || !userAddress) {
       setClaims([]);
-      setStats({
-        totalBets: 0,
-        wonBets: 0,
-        lostBets: 0,
-        claimableCount: 0,
-        totalWinnings: 0,
-        totalClaimed: 0
-      });
+      setLastClaim(null);
       setLoading(false);
       return;
     }
@@ -54,12 +41,6 @@ export const ClaimTab = ({
       const lastSlotTime = await getLastSlotTime();
       const currentTimestamp = lastSlotTime;
       const claimsData = [];
-      
-      let totalWinnings = 0;
-      let totalClaimed = 0;
-      let claimableCount = 0;
-      let wonCount = 0;
-      let lostCount = 0;
 
       // Look back 100 slots (5 hours) - load in parallel
       const slotPromises = [];
@@ -77,21 +58,6 @@ export const ClaimTab = ({
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value) {
           claimsData.push(result.value);
-          
-          if (result.value.settled) {
-            if (result.value.didWin) {
-              wonCount++;
-              const payout = result.value.payout;
-              if (!result.value.bet.claimed) {
-                totalWinnings += payout / 1e18;
-                claimableCount++;
-              } else {
-                totalClaimed += payout / 1e18;
-              }
-            } else {
-              lostCount++;
-            }
-          }
         }
       }
 
@@ -99,14 +65,7 @@ export const ClaimTab = ({
       claimsData.sort((a, b) => b.timestamp - a.timestamp);
 
       setClaims(claimsData);
-      setStats({
-        totalBets: claimsData.length,
-        wonBets: wonCount,
-        lostBets: lostCount,
-        claimableCount,
-        totalWinnings,
-        totalClaimed
-      });
+      setLastClaim(claimsData.length > 0 ? claimsData[0] : null);
 
       lastLoadTime.current = now;
       setLoading(false);
@@ -164,26 +123,10 @@ export const ClaimTab = ({
   if (loading) {
     return (
       <section className="section">
-        <div className="claim-stats">
-          <div className="claim-stat">
-            <div className="claim-stat-label">Total Bets</div>
-            <div className="claim-stat-value neutral">0</div>
-          </div>
-          <div className="claim-stat">
-            <div className="claim-stat-label">Won</div>
-            <div className="claim-stat-value">0</div>
-          </div>
-          <div className="claim-stat">
-            <div className="claim-stat-label">Lost</div>
-            <div className="claim-stat-value lost">0</div>
-          </div>
-          <div className="claim-stat">
-            <div className="claim-stat-label">To Claim</div>
-            <div className="claim-stat-value">0</div>
-          </div>
-        </div>
         <div className="slots-container">
-          <p style={{ textAlign: 'center', color: '#888' }}>Loading claims...</p>
+          <p style={{ textAlign: 'center', color: '#9E9E9E', padding: '40px 20px' }}>
+            Loading your bets...
+          </p>
         </div>
       </section>
     );
@@ -202,53 +145,151 @@ export const ClaimTab = ({
 
   return (
     <section className="section">
-      <div className="claim-stats">
-        <div className="claim-stat">
-          <div className="claim-stat-label">Total Bets</div>
-          <div className="claim-stat-value neutral">{stats.totalBets}</div>
+      {/* History Button */}
+      {claims.length > 1 && (
+        <div style={{ padding: '16px 0' }}>
+          <button 
+            className="btn btn-secondary" 
+            onClick={() => setShowHistory(true)}
+            style={{ width: '100%' }}
+          >
+            📜 View Betting History ({claims.length} bets)
+          </button>
         </div>
-        <div className="claim-stat">
-          <div className="claim-stat-label">Won</div>
-          <div className="claim-stat-value">{stats.wonBets}</div>
-        </div>
-        <div className="claim-stat">
-          <div className="claim-stat-label">Lost</div>
-          <div className="claim-stat-value lost">{stats.lostBets}</div>
-        </div>
-        <div className="claim-stat">
-          <div className="claim-stat-label">To Claim</div>
-          <div className="claim-stat-value">{stats.claimableCount}</div>
-        </div>
-      </div>
-      
-      <div className="claim-stats" style={{ marginBottom: '8px' }}>
-        <div className="claim-stat">
-          <div className="claim-stat-label">Total Winnings</div>
-          <div className="claim-stat-value">{stats.totalWinnings.toFixed(4)} ETH</div>
-        </div>
-        <div className="claim-stat">
-          <div className="claim-stat-label">Already Claimed</div>
-          <div className="claim-stat-value neutral">{stats.totalClaimed.toFixed(4)} ETH</div>
-        </div>
-      </div>
+      )}
 
-      <div className="slots-container">
-        {claims.length === 0 ? (
-          <div className="empty-state">
-            <div className="empty-state-icon">📭</div>
-            <p>No bets found</p>
-            <small style={{ color: '#666' }}>Place some bets first!</small>
+      {/* Last Bet / Current Status */}
+      {!lastClaim ? (
+        <div className="empty-state">
+          <div className="empty-state-icon">📭</div>
+          <p>No bets placed yet</p>
+          <small style={{ color: '#9E9E9E' }}>Go to the Bet tab to place your first bet!</small>
+        </div>
+      ) : (
+        <div>
+          <div style={{ 
+            fontSize: '15px', 
+            fontWeight: '700', 
+            color: '#757575', 
+            marginBottom: '16px',
+            textTransform: 'uppercase',
+            letterSpacing: '0.5px'
+          }}>
+            Last Bet
           </div>
-        ) : (
-          claims.map((claim) => (
-            <ClaimCard
-              key={`${claim.timestamp}-${claim.token}`}
-              claim={claim}
-              onClaimClick={onClaimClick}
-            />
-          ))
-        )}
-      </div>
+          <ClaimCard
+            claim={lastClaim}
+            onClaimClick={onClaimClick}
+          />
+        </div>
+      )}
+
+      {/* History Modal */}
+      {showHistory && (
+        <div 
+          className="modal show" 
+          onClick={(e) => {
+            if (e.target.className.includes('modal')) {
+              setShowHistory(false);
+            }
+          }}
+        >
+          <div className="modal-content" style={{ maxWidth: '360px', maxHeight: '80vh', overflow: 'hidden', display: 'flex', flexDirection: 'column' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '20px' }}>
+              <div className="modal-header" style={{ margin: 0 }}>
+                Betting History
+              </div>
+              <button 
+                onClick={() => setShowHistory(false)}
+                style={{
+                  background: 'none',
+                  border: 'none',
+                  fontSize: '24px',
+                  cursor: 'pointer',
+                  color: '#757575',
+                  padding: '0',
+                  width: '32px',
+                  height: '32px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  borderRadius: '50%',
+                  transition: 'all 0.2s ease'
+                }}
+                onMouseEnter={(e) => {
+                  e.target.style.background = '#F5F5F5';
+                  e.target.style.color = '#212121';
+                }}
+                onMouseLeave={(e) => {
+                  e.target.style.background = 'none';
+                  e.target.style.color = '#757575';
+                }}
+              >
+                ×
+              </button>
+            </div>
+
+            {/* Stats Summary */}
+            <div style={{ 
+              display: 'grid', 
+              gridTemplateColumns: '1fr 1fr 1fr',
+              gap: '8px',
+              marginBottom: '16px',
+              padding: '12px',
+              background: 'linear-gradient(135deg, #F8F9FA 0%, #E3F2FD 100%)',
+              borderRadius: '12px',
+              border: '1px solid #E0E0E0'
+            }}>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#757575', fontWeight: '600', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Total</div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: '#EF6C00' }}>{claims.length}</div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#757575', fontWeight: '600', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Won</div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: '#2E7D32' }}>
+                  {claims.filter(c => c.settled && c.didWin).length}
+                </div>
+              </div>
+              <div style={{ textAlign: 'center' }}>
+                <div style={{ fontSize: '10px', color: '#757575', fontWeight: '600', marginBottom: '4px', textTransform: 'uppercase', letterSpacing: '0.5px' }}>Lost</div>
+                <div style={{ fontSize: '18px', fontWeight: '800', color: '#C62828' }}>
+                  {claims.filter(c => c.settled && !c.didWin).length}
+                </div>
+              </div>
+            </div>
+
+            {/* Scrollable History List */}
+            <div style={{ 
+              overflowY: 'auto', 
+              flex: 1,
+              marginRight: '-24px',
+              paddingRight: '24px'
+            }}>
+              <div className="slots-container" style={{ marginTop: 0 }}>
+                {claims.map((claim) => (
+                  <ClaimCard
+                    key={`${claim.timestamp}-${claim.token}`}
+                    claim={claim}
+                    onClaimClick={onClaimClick}
+                    compact={true}
+                  />
+                ))}
+              </div>
+            </div>
+
+            {/* Close Button */}
+            <div style={{ marginTop: '16px', paddingTop: '16px', borderTop: '1px solid #E0E0E0' }}>
+              <button 
+                className="btn btn-secondary" 
+                onClick={() => setShowHistory(false)}
+                style={{ width: '100%' }}
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 };
