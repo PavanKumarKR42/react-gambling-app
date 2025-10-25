@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { SlotCard } from './SlotCard';
 import { TOKENS, SLOT_INTERVAL } from '../utils/constants';
-import { getTimeRemaining, getSlotStatus, calculatePayout } from '../utils/helpers';
+import { getTimeRemaining, getSlotStatus } from '../utils/helpers';
 
 export const BetTab = ({ 
   config, 
@@ -13,35 +13,45 @@ export const BetTab = ({
   onClaimClick 
 }) => {
   const [currentSlots, setCurrentSlots] = useState([]);
-  const [recentSlots, setRecentSlots] = useState([]);
   const [timers, setTimers] = useState({});
   const [loading, setLoading] = useState(true);
-  const cachedSlots = useRef(new Map());
+  const [lastSlotTime, setLastSlotTime] = useState(0);
   const timerInterval = useRef(null);
+  const checkInterval = useRef(null);
 
-  const loadSlots = useCallback(async () => {
+  const loadSlots = useCallback(async (silent = false) => {
     if (!config) return;
 
     try {
-      const lastSlotTime = await getLastSlotTime();
+      if (!silent) setLoading(true);
+      
+      const fetchedLastSlotTime = await getLastSlotTime();
 
-      if (lastSlotTime === 0) {
+      if (fetchedLastSlotTime === 0) {
         setCurrentSlots([]);
-        setRecentSlots([]);
+        setLastSlotTime(0);
         setLoading(false);
         return;
       }
 
-      // Load current slot
+      // Check if new slot was created
+      if (fetchedLastSlotTime !== lastSlotTime && lastSlotTime !== 0) {
+        // New slot detected - reload silently
+        console.log('New slot detected:', fetchedLastSlotTime);
+      }
+
+      setLastSlotTime(fetchedLastSlotTime);
+
+      // Load only current slot
       const currentSlotsData = await Promise.all(
         TOKENS.map(async (token) => {
-          const slot = await getSlot(lastSlotTime, token);
+          const slot = await getSlot(fetchedLastSlotTime, token);
           let userBet = null;
           let canClaim = false;
           let didWin = false;
 
           if (userAddress && slot && Number(slot[0]) !== 0) {
-            const bet = await getBet(lastSlotTime, token, userAddress);
+            const bet = await getBet(fetchedLastSlotTime, token, userAddress);
             if (bet && Number(bet[0]) > 0) {
               userBet = { amount: bet[0], betAbove: bet[1], claimed: bet[2] };
               
@@ -56,7 +66,7 @@ export const BetTab = ({
           return {
             slot,
             symbol: token,
-            slotStartTime: lastSlotTime,
+            slotStartTime: fetchedLastSlotTime,
             userBet,
             canClaim,
             didWin,
@@ -66,63 +76,18 @@ export const BetTab = ({
       );
 
       setCurrentSlots(currentSlotsData.filter(s => s.slot && Number(s.slot[0]) !== 0));
-
-      // Load recent slots (last 5)
-      const recentSlotTimes = [];
-      for (let i = 1; i <= 5; i++) {
-        const slotTime = lastSlotTime - (i * SLOT_INTERVAL);
-        if (slotTime > 0) recentSlotTimes.push(slotTime);
-      }
-
-      const recentSlotsData = [];
-      for (const slotTime of recentSlotTimes) {
-        for (const token of TOKENS) {
-          const slot = await getSlot(slotTime, token);
-          
-          if (slot && Number(slot[0]) !== 0) {
-            let userBet = null;
-            let canClaim = false;
-            let didWin = false;
-
-            if (userAddress) {
-              const bet = await getBet(slotTime, token, userAddress);
-              if (bet && Number(bet[0]) > 0) {
-                userBet = { amount: bet[0], betAbove: bet[1], claimed: bet[2] };
-                
-                if (slot[7]) { // settled
-                  const [, , , poolAbove, poolBelow, startPrice, targetPrice] = slot;
-                  didWin = bet[1] ? (targetPrice > startPrice) : (targetPrice < startPrice);
-                  canClaim = didWin && !bet[2];
-                }
-              }
-            }
-
-            recentSlotsData.push({
-              slot,
-              symbol: token,
-              slotStartTime: slotTime,
-              userBet,
-              canClaim,
-              didWin,
-              isCurrent: false
-            });
-          }
-        }
-      }
-
-      setRecentSlots(recentSlotsData);
       setLoading(false);
     } catch (e) {
       console.error('Load slots error:', e);
       setLoading(false);
     }
-  }, [config, userAddress, getSlot, getBet, getLastSlotTime]);
+  }, [config, userAddress, getSlot, getBet, getLastSlotTime, lastSlotTime]);
 
   const updateTimers = useCallback(() => {
     const newTimers = {};
     const now = Math.floor(Date.now() / 1000);
 
-    [...currentSlots, ...recentSlots].forEach(({ slot, slotStartTime, symbol }) => {
+    currentSlots.forEach(({ slot, slotStartTime, symbol }) => {
       if (!slot || Number(slot[0]) === 0) return;
 
       const key = `${slotStartTime}-${symbol}`;
@@ -142,12 +107,31 @@ export const BetTab = ({
     });
 
     setTimers(newTimers);
-  }, [currentSlots, recentSlots]);
+  }, [currentSlots]);
 
+  // Check for new slots every 5 seconds
+  const checkForNewSlot = useCallback(async () => {
+    if (!config) return;
+    
+    try {
+      const fetchedLastSlotTime = await getLastSlotTime();
+      
+      // If a new slot was created, reload silently
+      if (fetchedLastSlotTime > lastSlotTime && lastSlotTime !== 0) {
+        console.log('Auto-reloading for new slot');
+        await loadSlots(true); // Silent reload
+      }
+    } catch (e) {
+      console.error('Check new slot error:', e);
+    }
+  }, [config, getLastSlotTime, lastSlotTime, loadSlots]);
+
+  // Initial load
   useEffect(() => {
     loadSlots();
   }, [loadSlots]);
 
+  // Setup timer updates
   useEffect(() => {
     updateTimers();
     
@@ -163,6 +147,21 @@ export const BetTab = ({
       }
     };
   }, [updateTimers]);
+
+  // Setup automatic slot checking
+  useEffect(() => {
+    if (checkInterval.current) {
+      clearInterval(checkInterval.current);
+    }
+    
+    checkInterval.current = setInterval(checkForNewSlot, 5000);
+
+    return () => {
+      if (checkInterval.current) {
+        clearInterval(checkInterval.current);
+      }
+    };
+  }, [checkForNewSlot]);
 
   if (loading) {
     return (
@@ -206,29 +205,6 @@ export const BetTab = ({
           />
         ))}
       </div>
-
-      {recentSlots.length > 0 && (
-        <div className="slots-history">
-          <div className="history-header">📜 Recent Slots</div>
-          <div className="slots-container">
-            {recentSlots.map(({ slot, symbol, slotStartTime, userBet, canClaim, didWin, isCurrent }) => (
-              <SlotCard
-                key={`${slotStartTime}-${symbol}`}
-                slot={slot}
-                symbol={symbol}
-                slotStartTime={slotStartTime}
-                userBet={userBet}
-                canClaim={canClaim}
-                didWin={didWin}
-                isCurrent={isCurrent}
-                timer={timers[`${slotStartTime}-${symbol}`] || '--:--'}
-                onBetClick={onBetClick}
-                onClaimClick={onClaimClick}
-              />
-            ))}
-          </div>
-        </div>
-      )}
     </section>
   );
 };
