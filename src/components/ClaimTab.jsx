@@ -42,9 +42,10 @@ export const ClaimTab = ({
       const currentTimestamp = lastSlotTime;
       const claimsData = [];
 
-      // Look back 100 slots (5 hours) - load in parallel
+      // Look back 200 slots (10 hours) to capture more bets
+      // Increased from 100 to ensure we catch all user bets
       const slotPromises = [];
-      for (let i = 0; i < 100; i++) {
+      for (let i = 0; i < 200; i++) {
         const timestamp = currentTimestamp - (i * SLOT_INTERVAL);
         if (timestamp <= 0) break;
         
@@ -53,13 +54,19 @@ export const ClaimTab = ({
         }
       }
 
+      console.log(`Checking ${slotPromises.length} slot-token combinations for bets...`);
+
       const results = await Promise.allSettled(slotPromises);
       
+      let foundBets = 0;
       for (const result of results) {
         if (result.status === 'fulfilled' && result.value) {
           claimsData.push(result.value);
+          foundBets++;
         }
       }
+
+      console.log(`Found ${foundBets} bets for user ${userAddress}`);
 
       // Sort by timestamp (newest first)
       claimsData.sort((a, b) => b.timestamp - a.timestamp);
@@ -84,10 +91,17 @@ export const ClaimTab = ({
         getBet(timestamp, token, userAddress)
       ]);
 
-      if (!slot || Number(slot[0]) === 0 || !bet || Number(bet[0]) === 0) {
+      // Check if slot exists
+      if (!slot || Number(slot[0]) === 0) {
         return null;
       }
 
+      // Check if user has a bet in this slot
+      if (!bet || Number(bet[0]) === 0) {
+        return null;
+      }
+
+      // User has a bet! Process it
       const [startTime, endTime, targetTime, poolAbove, poolBelow, startPrice, targetPrice, settled] = slot;
       const [betAmount, betAbove, claimed] = bet;
 
@@ -102,6 +116,8 @@ export const ClaimTab = ({
         }
       }
 
+      console.log(`Found bet: ${token} at slot ${timestamp}, settled: ${settled}, won: ${didWin}`);
+
       return {
         timestamp,
         token,
@@ -112,13 +128,21 @@ export const ClaimTab = ({
         payout
       };
     } catch (e) {
+      // Silent fail for slots that don't exist or have errors
       return null;
     }
   };
 
   useEffect(() => {
-    loadClaims(forceReload);
+    loadClaims(forceReload > 0);
   }, [loadClaims, forceReload]);
+
+  // Also load when component mounts or userAddress changes
+  useEffect(() => {
+    if (userAddress) {
+      loadClaims(true);
+    }
+  }, [userAddress]);
 
   if (loading) {
     return (
@@ -145,18 +169,26 @@ export const ClaimTab = ({
 
   return (
     <section className="section">
-      {/* History Button */}
-      {claims.length > 1 && (
-        <div style={{ padding: '16px 0' }}>
+      {/* Refresh Button */}
+      <div style={{ padding: '16px 0 8px', display: 'flex', gap: '8px' }}>
+        <button 
+          className="btn btn-secondary" 
+          onClick={() => loadClaims(true)}
+          disabled={loading}
+          style={{ flex: 1 }}
+        >
+          🔄 Refresh Bets
+        </button>
+        {claims.length > 1 && (
           <button 
             className="btn btn-secondary" 
             onClick={() => setShowHistory(true)}
-            style={{ width: '100%' }}
+            style={{ flex: 1 }}
           >
-            📜 View Betting History ({claims.length} bets)
+            📜 History ({claims.length})
           </button>
-        </div>
-      )}
+        )}
+      </div>
 
       {/* Last Bet / Current Status */}
       {!lastClaim ? (
