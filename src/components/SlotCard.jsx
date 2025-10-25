@@ -48,13 +48,15 @@ export const SlotCard = ({
 
       {!settled && status === 'waiting' && (
         <div className="bet-hint">
-          🕐 Betting closed. Waiting for settlement...
+          ⏳ Betting closed. Waiting for settlement...<br />
+          <small style={{ color: '#666', fontSize: '10px' }}>Next slot will open after settlement</small>
         </div>
       )}
 
       {!settled && status === 'ready' && (
         <div className="bet-hint">
-          ⏳ Ready to settle. Keeper will process soon...
+          ⏳ Ready to settle. Keeper will process soon...<br />
+          <small style={{ color: '#666', fontSize: '10px' }}>New slot coming after settlement</small>
         </div>
       )}
 

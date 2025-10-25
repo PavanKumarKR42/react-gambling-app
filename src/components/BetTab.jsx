@@ -92,15 +92,23 @@ export const BetTab = ({
 
       const key = `${slotStartTime}-${symbol}`;
       const [startTime, endTime, targetTime, , , , , settled] = slot;
+      
+      const slotAge = now - Number(startTime);
+      const bettingDuration = Number(endTime) - Number(startTime);
+      const totalDuration = Number(targetTime) - Number(startTime);
 
       if (settled) {
         newTimers[key] = '✅ Settled';
       } else if (now < Number(endTime)) {
         const remaining = getTimeRemaining(endTime);
-        newTimers[key] = remaining ? `⏱️ Betting closes in ${remaining}` : '⏳ Closing...';
+        const elapsed = Math.floor(slotAge / 60);
+        const total = Math.floor(bettingDuration / 60);
+        newTimers[key] = remaining ? `⏱️ Betting: ${elapsed}/${total} min (${remaining} left)` : '⏳ Closing...';
       } else if (now < Number(targetTime)) {
         const remaining = getTimeRemaining(targetTime);
-        newTimers[key] = remaining ? `🕐 Settlement in ${remaining}` : '⏳ Settling...';
+        const elapsed = Math.floor(slotAge / 60);
+        const total = Math.floor(totalDuration / 60);
+        newTimers[key] = remaining ? `🕐 Waiting: ${elapsed}/${total} min (${remaining} left)` : '⏳ Settling...';
       } else {
         newTimers[key] = '⏳ Awaiting settlement...';
       }
