@@ -18,9 +18,9 @@ export const BetTab = ({
   const [lastSlotTime, setLastSlotTime] = useState(0);
   const [isWaitingForNewSlot, setIsWaitingForNewSlot] = useState(false);
   const timerInterval = useRef(null);
-  const checkInterval = useRef(null);
+  const aggressiveCheckInterval = useRef(null);
   const loadingRef = useRef(false);
-  const retryCount = useRef(0);
+  const lastCheckTime = useRef(0);
 
   const loadSlots = useCallback(async (silent = false) => {
     if (!config || loadingRef.current) return;
@@ -41,15 +41,16 @@ export const BetTab = ({
       }
 
       // Check if new slot was created
-      if (fetchedLastSlotTime !== lastSlotTime && lastSlotTime !== 0) {
-        console.log('✅ New slot detected:', new Date(fetchedLastSlotTime * 1000).toLocaleTimeString());
-        setIsWaitingForNewSlot(false);
-        retryCount.current = 0;
+      if (fetchedLastSlotTime !== lastSlotTime) {
+        if (lastSlotTime !== 0) {
+          const delay = fetchedLastSlotTime - (lastSlotTime + SLOT_INTERVAL);
+          console.log(`✅ New slot detected at ${new Date(fetchedLastSlotTime * 1000).toLocaleTimeString()} (delay: ${delay}s)`);
+          setIsWaitingForNewSlot(false);
+        }
+        setLastSlotTime(fetchedLastSlotTime);
       }
 
-      setLastSlotTime(fetchedLastSlotTime);
-
-      // Load only current slot
+      // Load current slot data
       const currentSlotsData = await Promise.all(
         TOKENS.map(async (token) => {
           const slot = await getSlot(fetchedLastSlotTime, token);
@@ -121,15 +122,12 @@ export const BetTab = ({
         const total = Math.floor(totalDuration / 60);
         newTimers[key] = remaining ? `🕐 Waiting: ${elapsed}/${total} min (${remaining} left)` : '⏳ Settling...';
       } else {
-        // Past target time but not settled yet
-        const timeSinceTarget = now - Number(targetTime);
-        
-        // Check if we should expect a new slot
+        // Past target time - new slot should be coming
         const expectedNewSlotTime = Number(startTime) + SLOT_INTERVAL;
         if (now >= expectedNewSlotTime) {
-          // We're past when the new slot should have been created
           setIsWaitingForNewSlot(true);
-          newTimers[key] = '🔄 New slot incoming...';
+          const delay = now - expectedNewSlotTime;
+          newTimers[key] = delay > 60 ? `🔄 New slot pending (${Math.floor(delay/60)}m delay)` : '🔄 New slot incoming...';
         } else {
           newTimers[key] = '⏳ Awaiting settlement...';
         }
@@ -139,54 +137,43 @@ export const BetTab = ({
     setTimers(newTimers);
   }, [currentSlots]);
 
-  // Check for new slots with exponential backoff
-  const checkForNewSlot = useCallback(async () => {
+  // Aggressive check when expecting new slot
+  const aggressiveCheckForNewSlot = useCallback(async () => {
     if (!config || loadingRef.current) return;
     
+    const now = Math.floor(Date.now() / 1000);
+    
+    // Prevent checking too frequently (min 1 second apart)
+    if (now - lastCheckTime.current < 1) return;
+    lastCheckTime.current = now;
+    
     try {
-      const now = Math.floor(Date.now() / 1000);
       const fetchedLastSlotTime = await getLastSlotTime();
       
-      // If a new slot was created, reload
+      // If new slot detected, reload immediately
       if (fetchedLastSlotTime > lastSlotTime) {
-        console.log('🔄 Auto-reloading for new slot');
+        console.log('🎯 New slot found! Reloading...');
         await loadSlots(true);
-        return;
-      }
-      
-      // Check if we're past the expected new slot time
-      if (lastSlotTime > 0) {
-        const expectedNewSlotTime = lastSlotTime + SLOT_INTERVAL;
-        const timeSinceExpected = now - expectedNewSlotTime;
+      } else if (isWaitingForNewSlot) {
+        // Still waiting, check if we should alert
+        const expectedTime = lastSlotTime + SLOT_INTERVAL;
+        const delay = now - expectedTime;
         
-        // If we're past expected time and slot hasn't been created
-        if (timeSinceExpected > 0 && timeSinceExpected < 300) { // Within 5 minutes of expected
-          console.log(`⏰ Expecting new slot (${timeSinceExpected}s past expected time)`);
-          setIsWaitingForNewSlot(true);
-          retryCount.current++;
-          
-          // Retry loading more aggressively
-          if (retryCount.current % 3 === 0) { // Every 3rd check
-            console.log('🔍 Force checking for new slot...');
-            await loadSlots(true);
-          }
-        } else if (timeSinceExpected >= 300) {
-          // More than 5 minutes past - might be an issue
-          console.warn('⚠️ Slot creation significantly delayed');
-          setIsWaitingForNewSlot(true);
+        if (delay > 0 && delay % 30 === 0) { // Log every 30 seconds
+          console.log(`⏰ Still waiting for new slot (${delay}s delay)`);
         }
       }
     } catch (e) {
-      console.error('Check new slot error:', e);
+      console.error('Aggressive check error:', e);
     }
-  }, [config, getLastSlotTime, lastSlotTime, loadSlots]);
+  }, [config, getLastSlotTime, lastSlotTime, isWaitingForNewSlot, loadSlots]);
 
   // Initial load
   useEffect(() => {
     loadSlots();
   }, [loadSlots]);
 
-  // Setup timer updates
+  // Setup timer updates (every second)
   useEffect(() => {
     updateTimers();
     
@@ -203,23 +190,27 @@ export const BetTab = ({
     };
   }, [updateTimers]);
 
-  // Setup automatic slot checking with adaptive frequency
+  // Setup aggressive checking when waiting for new slot
   useEffect(() => {
-    if (checkInterval.current) {
-      clearInterval(checkInterval.current);
+    if (aggressiveCheckInterval.current) {
+      clearInterval(aggressiveCheckInterval.current);
     }
     
-    // Check more frequently if waiting for new slot
-    const checkFrequency = isWaitingForNewSlot ? 2000 : 5000;
-    
-    checkInterval.current = setInterval(checkForNewSlot, checkFrequency);
+    if (isWaitingForNewSlot) {
+      // Check every 1 second when waiting for new slot
+      console.log('🔍 Enabling aggressive slot checking (every 1s)');
+      aggressiveCheckInterval.current = setInterval(aggressiveCheckForNewSlot, 1000);
+    } else {
+      // Normal mode: check every 5 seconds
+      aggressiveCheckInterval.current = setInterval(aggressiveCheckForNewSlot, 5000);
+    }
 
     return () => {
-      if (checkInterval.current) {
-        clearInterval(checkInterval.current);
+      if (aggressiveCheckInterval.current) {
+        clearInterval(aggressiveCheckInterval.current);
       }
     };
-  }, [checkForNewSlot, isWaitingForNewSlot]);
+  }, [isWaitingForNewSlot, aggressiveCheckForNewSlot]);
 
   if (loading) {
     return (
@@ -259,7 +250,7 @@ export const BetTab = ({
           boxShadow: '0 2px 8px rgba(74, 144, 226, 0.3)',
           animation: 'pulse 2s ease-in-out infinite'
         }}>
-          🔄 Waiting for Chainlink upkeep to create new slot...
+          🔄 Waiting for Chainlink upkeep to create new slot... (checking every 1s)
         </div>
       )}
       <div className="slots-container">
